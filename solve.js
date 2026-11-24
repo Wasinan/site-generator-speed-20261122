@@ -31,16 +31,9 @@ const INCLUDE_DEPTH = 8;
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
 /** `text` with & < > " and ' escaped. Runs with nothing to escape are returned as they are. */
+const ESC_TEST = /[&<>"']/;
 function escapeHtml(text) {
-  if (
-    text.indexOf('&') === -1 &&
-    text.indexOf('<') === -1 &&
-    text.indexOf('>') === -1 &&
-    text.indexOf('"') === -1 &&
-    text.indexOf("'") === -1
-  ) {
-    return text;
-  }
+  if (!ESC_TEST.test(text)) return text;
   return text.replace(/[&<>"']/g, (c) => ESCAPES[c]);
 }
 
@@ -231,7 +224,12 @@ function headingOf(line) {
 
 /** Whether `line` ends a paragraph. */
 function endsParagraph(line) {
-  return BLANK.test(line) || FENCE_OPEN.test(line) || headingOf(line) !== null || HR.test(line);
+  const c0 = line.charCodeAt(0);
+  if (line === '' || ((c0 === 32 || c0 === 9) && BLANK.test(line))) return true;
+  if (c0 === 96 && FENCE_OPEN.test(line)) return true;
+  if (c0 === 35 && headingOf(line) !== null) return true;
+  if ((c0 === 45 || c0 === 42) && HR.test(line)) return true;
+  return false;
 }
 
 /** A line as it is rendered: spaces and tabs at either end dropped. Unchanged lines are returned as they are. */
@@ -277,17 +275,21 @@ function findSingleStar(s, from) {
 }
 
 /**
- * `s` rendered inline, appended to `out`. Plain runs are escaped in one
- * regex pass each; only the markup characters break a run.
+ * `s` rendered inline, appended to `out`. Plain runs are pushed as plain
+ * slices: every character that needs escaping (& < > " ') breaks the run
+ * and is pushed as its entity, so no run is ever escaped by a regex.
  */
 function inlineTo(s, env, out) {
   let i = 0;
   let run = 0;
   const n = s.length;
+  const flush = (end) => {
+    if (end > run) out.push(s.slice(run, end));
+  };
   while (i < n) {
     const c = s[i];
     if (c === '\\' && i + 1 < n && ESCAPABLE.has(s[i + 1])) {
-      if (i > run) out.push(escapeHtml(s.slice(run, i)));
+      flush(i);
       out.push(escapeHtml(s[i + 1]));
       i += 2;
       run = i;
@@ -296,7 +298,7 @@ function inlineTo(s, env, out) {
     if (c === '`') {
       const j = s.indexOf('`', i + 1);
       if (j > i + 1) {
-        if (i > run) out.push(escapeHtml(s.slice(run, i)));
+        flush(i);
         out.push('<code>', escapeHtml(s.slice(i + 1, j)), '</code>');
         i = j + 1;
         run = i;
@@ -309,7 +311,7 @@ function inlineTo(s, env, out) {
       if (s[i + 1] === '*') {
         const j = findUnescaped(s, '**', i + 2);
         if (j > i + 2) {
-          if (i > run) out.push(escapeHtml(s.slice(run, i)));
+          flush(i);
           out.push('<strong>');
           inlineTo(s.slice(i + 2, j), env, out);
           out.push('</strong>');
@@ -322,7 +324,7 @@ function inlineTo(s, env, out) {
       }
       const j = findSingleStar(s, i + 1);
       if (j > i + 1) {
-        if (i > run) out.push(escapeHtml(s.slice(run, i)));
+        flush(i);
         out.push('<em>');
         inlineTo(s.slice(i + 1, j), env, out);
         out.push('</em>');
@@ -338,7 +340,7 @@ function inlineTo(s, env, out) {
       const m = k !== -1 && s[k + 1] === '(' ? s.indexOf(')', k + 2) : -1;
       const target = m === -1 ? '' : s.slice(k + 2, m);
       if (target !== '' && !/\s/.test(target)) {
-        if (i > run) out.push(escapeHtml(s.slice(run, i)));
+        flush(i);
         out.push('<a href="', escapeHtml(env.link(target)), '">');
         inlineTo(s.slice(i + 1, k), env, out);
         out.push('</a>');
@@ -349,9 +351,16 @@ function inlineTo(s, env, out) {
       i++;
       continue;
     }
+    if (c === '&' || c === '<' || c === '>' || c === '"' || c === "'") {
+      flush(i);
+      out.push(ESCAPES[c]);
+      i++;
+      run = i;
+      continue;
+    }
     i++;
   }
-  if (n > run) out.push(escapeHtml(s.slice(run, n)));
+  flush(n);
 }
 
 /**
@@ -409,15 +418,16 @@ function renderBody(lines, start, env) {
   const n = lines.length;
   while (i < n) {
     const line = lines[i];
-    if (BLANK.test(line)) {
+    const c0 = line.charCodeAt(0);
+    if (line === '' || ((c0 === 32 || c0 === 9) && BLANK.test(line))) {
       i++;
       continue;
     }
-    const fence = FENCE_OPEN.exec(line);
+    const fence = c0 === 96 ? FENCE_OPEN.exec(line) : null;
     if (fence !== null) {
       const body = [];
       i++;
-      while (i < n && !FENCE_CLOSE.test(lines[i])) body.push(lines[i++]);
+      while (i < n && !(lines[i].charCodeAt(0) === 96 && FENCE_CLOSE.test(lines[i]))) body.push(lines[i++]);
       i++;
       const cls = fence[1] === '' ? '' : ` class="language-${escapeHtml(fence[1])}"`;
       let code = `<pre><code${cls}>`;
@@ -425,7 +435,7 @@ function renderBody(lines, start, env) {
       blocks.push(`${code}</code></pre>`);
       continue;
     }
-    const heading = headingOf(line);
+    const heading = c0 === 35 ? headingOf(line) : null;
     if (heading !== null) {
       const id = uniqueSlug(slugify(heading.text), ids);
       const parts = [];
@@ -438,12 +448,12 @@ function renderBody(lines, start, env) {
       i++;
       continue;
     }
-    if (HR.test(line)) {
+    if ((c0 === 45 || c0 === 42) && HR.test(line)) {
       blocks.push('<hr>');
       i++;
       continue;
     }
-    if (line.charCodeAt(0) === 62) {
+    if (c0 === 62) {
       const body = [];
       while (i < n && lines[i].charCodeAt(0) === 62) body.push(lines[i++].replace(/^> ?/, ''));
       const kept = [];
@@ -460,8 +470,8 @@ function renderBody(lines, start, env) {
       }
       continue;
     }
-    const bullet = BULLET.exec(line);
-    const ordered = bullet === null ? ORDERED.exec(line) : null;
+    const bullet = c0 === 45 || c0 === 42 ? BULLET.exec(line) : null;
+    const ordered = bullet === null && c0 >= 48 && c0 <= 57 ? ORDERED.exec(line) : null;
     if (bullet !== null || ordered !== null) {
       const isOrdered = ordered !== null;
       const marker = isOrdered ? ORDERED : BULLET;
@@ -471,7 +481,11 @@ function renderBody(lines, start, env) {
         if (m !== null) {
           items.push([trimLine(isOrdered ? m[2] : m[1])]);
           i++;
-        } else if (CONTINUED.test(lines[i])) {
+        } else if (
+          lines[i].charCodeAt(0) === 32 &&
+          lines[i].charCodeAt(1) === 32 &&
+          CONTINUED.test(lines[i])
+        ) {
           items[items.length - 1].push(trimLine(lines[i]));
           i++;
         } else break;
