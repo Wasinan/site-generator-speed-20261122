@@ -369,34 +369,32 @@ function inlineTo(s, env, out) {
  * the /\S+/ grammar uses (so the count is identical, without a regex
  * call per line).
  */
-function countWords(lines, start) {
+/** One line's words: runs of characters other than whitespace, with the same whitespace set the /\S+/ grammar uses. */
+function lineWords(line) {
   let w = 0;
-  for (let i = start; i < lines.length; i++) {
-    const line = lines[i];
-    let inWord = false;
-    for (let j = 0; j < line.length; j++) {
-      const c = line.charCodeAt(j);
-      const ws =
-        c === 32 ||
-        c === 9 ||
-        c === 10 ||
-        c === 11 ||
-        c === 12 ||
-        c === 13 ||
-        c === 160 ||
-        c === 5760 ||
-        (c >= 8192 && c <= 8202) ||
-        c === 8232 ||
-        c === 8233 ||
-        c === 8239 ||
-        c === 8287 ||
-        c === 12288 ||
-        c === 65279;
-      if (ws) inWord = false;
-      else if (!inWord) {
-        inWord = true;
-        w++;
-      }
+  let inWord = false;
+  for (let j = 0; j < line.length; j++) {
+    const c = line.charCodeAt(j);
+    const ws =
+      c === 32 ||
+      c === 9 ||
+      c === 10 ||
+      c === 11 ||
+      c === 12 ||
+      c === 13 ||
+      c === 160 ||
+      c === 5760 ||
+      (c >= 8192 && c <= 8202) ||
+      c === 8232 ||
+      c === 8233 ||
+      c === 8239 ||
+      c === 8287 ||
+      c === 12288 ||
+      c === 65279;
+    if (ws) inWord = false;
+    else if (!inWord) {
+      inWord = true;
+      w++;
     }
   }
   return w;
@@ -409,15 +407,16 @@ function countWords(lines, start) {
  * word count.
  */
 function renderBody(lines, start, env) {
-  const words = countWords(lines, start);
-  const blocks = [];
+  const out = [];
   const toc = [];
   const ids = new Set();
   let excerpt = null;
+  let words = 0;
   let i = start;
   const n = lines.length;
   while (i < n) {
     const line = lines[i];
+    words += lineWords(line);
     const c0 = line.charCodeAt(0);
     if (line === '' || ((c0 === 32 || c0 === 9) && BLANK.test(line))) {
       i++;
@@ -425,48 +424,55 @@ function renderBody(lines, start, env) {
     }
     const fence = c0 === 96 ? FENCE_OPEN.exec(line) : null;
     if (fence !== null) {
-      const body = [];
       i++;
-      while (i < n && !(lines[i].charCodeAt(0) === 96 && FENCE_CLOSE.test(lines[i]))) body.push(lines[i++]);
+      out.push('<pre><code', fence[1] === '' ? '' : ` class="language-${escapeHtml(fence[1])}"`, '>');
+      while (i < n && !(lines[i].charCodeAt(0) === 96 && FENCE_CLOSE.test(lines[i]))) {
+        words += lineWords(lines[i]);
+        out.push(escapeHtml(lines[i]), '\n');
+        i++;
+      }
+      if (i < n) words += lineWords(lines[i]);
       i++;
-      const cls = fence[1] === '' ? '' : ` class="language-${escapeHtml(fence[1])}"`;
-      let code = `<pre><code${cls}>`;
-      for (const l of body) code += `${escapeHtml(l)}\n`;
-      blocks.push(`${code}</code></pre>`);
+      out.push('</code></pre>', '\n');
       continue;
     }
     const heading = c0 === 35 ? headingOf(line) : null;
     if (heading !== null) {
       const id = uniqueSlug(slugify(heading.text), ids);
-      const parts = [];
-      inlineTo(heading.text, env, parts);
-      const html = parts.join('');
-      blocks.push(`<h${heading.depth} id="${id}">${html}</h${heading.depth}>`);
+      out.push(`<h${heading.depth} id="${id}">`);
+      const h0 = out.length;
+      inlineTo(heading.text, env, out);
       if (heading.depth === 2 || heading.depth === 3) {
-        toc.push({ level: heading.depth, id, html });
+        toc.push({ level: heading.depth, id, html: out.slice(h0).join('') });
       }
+      out.push(`</h${heading.depth}>`, '\n');
       i++;
       continue;
     }
     if ((c0 === 45 || c0 === 42) && HR.test(line)) {
-      blocks.push('<hr>');
+      out.push('<hr>', '\n');
       i++;
       continue;
     }
     if (c0 === 62) {
-      const body = [];
-      while (i < n && lines[i].charCodeAt(0) === 62) body.push(lines[i++].replace(/^> ?/, ''));
+      const body = [lines[i].replace(/^> ?/, '')];
+      i++;
+      while (i < n && lines[i].charCodeAt(0) === 62) {
+        words += lineWords(lines[i]);
+        body.push(lines[i].replace(/^> ?/, ''));
+        i++;
+      }
       const kept = [];
       for (const l of body) {
         const t = trimLine(l);
         if (t !== '') kept.push(t);
       }
       if (kept.length === 0) {
-        blocks.push('<blockquote>\n</blockquote>');
+        out.push('<blockquote>\n</blockquote>', '\n');
       } else {
-        const parts = [];
-        inlineTo(kept.join('\n'), env, parts);
-        blocks.push(`<blockquote>\n<p>${parts.join('')}</p>\n</blockquote>`);
+        out.push('<blockquote>\n<p>');
+        inlineTo(kept.join('\n'), env, out);
+        out.push('</p>\n</blockquote>', '\n');
       }
       continue;
     }
@@ -475,10 +481,12 @@ function renderBody(lines, start, env) {
     if (bullet !== null || ordered !== null) {
       const isOrdered = ordered !== null;
       const marker = isOrdered ? ORDERED : BULLET;
-      const items = [];
+      const items = [[trimLine(isOrdered ? ordered[2] : bullet[1])]];
+      i++;
       while (i < n) {
         const m = marker.exec(lines[i]);
         if (m !== null) {
+          words += lineWords(lines[i]);
           items.push([trimLine(isOrdered ? m[2] : m[1])]);
           i++;
         } else if (
@@ -486,32 +494,35 @@ function renderBody(lines, start, env) {
           lines[i].charCodeAt(1) === 32 &&
           CONTINUED.test(lines[i])
         ) {
+          words += lineWords(lines[i]);
           items[items.length - 1].push(trimLine(lines[i]));
           i++;
         } else break;
       }
       const tag = isOrdered ? 'ol' : 'ul';
       const open = isOrdered && Number(ordered[1]) !== 1 ? `<ol start="${ordered[1]}">` : `<${tag}>`;
-      let html = `${open}\n`;
+      out.push(open, '\n');
       for (const parts of items) {
-        const p = [];
-        inlineTo(parts.join('\n'), env, p);
-        html += `<li>${p.join('')}</li>\n`;
+        out.push('<li>');
+        inlineTo(parts.join('\n'), env, out);
+        out.push('</li>\n');
       }
-      html += `</${tag}>`;
-      blocks.push(html);
+      out.push(`</${tag}>`, '\n');
       continue;
     }
     const body = [trimLine(line)];
     i++;
-    while (i < n && !endsParagraph(lines[i])) body.push(trimLine(lines[i++]));
-    const parts = [];
-    inlineTo(body.join('\n'), env, parts);
-    const html = parts.join('');
-    if (excerpt === null) excerpt = html;
-    blocks.push(`<p>${html}</p>`);
+    while (i < n && !endsParagraph(lines[i])) {
+      words += lineWords(lines[i]);
+      body.push(trimLine(lines[i++]));
+    }
+    out.push('<p>');
+    const p0 = out.length;
+    inlineTo(body.join('\n'), env, out);
+    if (excerpt === null) excerpt = out.slice(p0).join('');
+    out.push('</p>', '\n');
   }
-  return { html: blocks.length === 0 ? '' : `${blocks.join('\n')}\n`, toc, excerpt: excerpt ?? '', words };
+  return { html: out.join(''), toc, excerpt: excerpt ?? '', words };
 }
 
 // ---------------------------------------------------------------- templates
