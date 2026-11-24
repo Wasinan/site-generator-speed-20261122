@@ -244,10 +244,10 @@ function trimLine(line) {
 /** The characters a backslash escapes. */
 const ESCAPABLE = new Set(['\\', '`', '*', '_', '[', ']', '(', ')', '#', '+', '-', '.', '!', '>']);
 
-/** The first index from `from` where `s` holds `what` outside an escape, or -1. */
-function findUnescaped(s, what, from) {
-  for (let j = from; j <= s.length - what.length; j++) {
-    if (s[j] === '\\' && j + 1 < s.length && ESCAPABLE.has(s[j + 1])) {
+/** The first index from `from` (and before `end`) where `s` holds `what` outside an escape, or -1. */
+function findUnescaped(s, what, from, end) {
+  for (let j = from; j <= end - what.length; j++) {
+    if (s[j] === '\\' && j + 1 < end && ESCAPABLE.has(s[j + 1])) {
       j++;
       continue;
     }
@@ -256,11 +256,11 @@ function findUnescaped(s, what, from) {
   return -1;
 }
 
-/** The first single * from `from` (one whose run is not **), outside an escape, or -1. */
-function findSingleStar(s, from) {
-  for (let j = from; j < s.length; j++) {
+/** The first single * from `from` (and before `end`, one whose run is not **), outside an escape, or -1. */
+function findSingleStar(s, from, end) {
+  for (let j = from; j < end; j++) {
     const c = s[j];
-    if (c === '\\' && j + 1 < s.length && ESCAPABLE.has(s[j + 1])) {
+    if (c === '\\' && j + 1 < end && ESCAPABLE.has(s[j + 1])) {
       j++;
       continue;
     }
@@ -275,14 +275,16 @@ function findSingleStar(s, from) {
 }
 
 /**
- * `s` rendered inline, appended to `out`. Plain runs are pushed as plain
- * slices: every character that needs escaping (& < > " ') breaks the run
- * and is pushed as its entity, so no run is ever escaped by a regex.
+ * The range s[lo, hi) rendered inline, appended to `out`. Plain runs are
+ * pushed as plain slices: every character that needs escaping (& < > " ')
+ * breaks the run and is pushed as its entity, so no run is ever escaped
+ * by a regex. Nested markup renders over ranges of the same string, never
+ * over sliced copies of it.
  */
-function inlineTo(s, env, out) {
-  let i = 0;
-  let run = 0;
-  const n = s.length;
+function inlineTo(s, env, out, lo = 0, hi = s.length) {
+  let i = lo;
+  let run = lo;
+  const n = hi;
   const flush = (end) => {
     if (end > run) out.push(s.slice(run, end));
   };
@@ -297,7 +299,7 @@ function inlineTo(s, env, out) {
     }
     if (c === '`') {
       const j = s.indexOf('`', i + 1);
-      if (j > i + 1) {
+      if (j !== -1 && j < n && j > i + 1) {
         flush(i);
         out.push('<code>', escapeHtml(s.slice(i + 1, j)), '</code>');
         i = j + 1;
@@ -309,11 +311,11 @@ function inlineTo(s, env, out) {
     }
     if (c === '*') {
       if (s[i + 1] === '*') {
-        const j = findUnescaped(s, '**', i + 2);
+        const j = findUnescaped(s, '**', i + 2, n);
         if (j > i + 2) {
           flush(i);
           out.push('<strong>');
-          inlineTo(s.slice(i + 2, j), env, out);
+          inlineTo(s, env, out, i + 2, j);
           out.push('</strong>');
           i = j + 2;
           run = i;
@@ -322,11 +324,11 @@ function inlineTo(s, env, out) {
         }
         continue;
       }
-      const j = findSingleStar(s, i + 1);
+      const j = findSingleStar(s, i + 1, n);
       if (j > i + 1) {
         flush(i);
         out.push('<em>');
-        inlineTo(s.slice(i + 1, j), env, out);
+        inlineTo(s, env, out, i + 1, j);
         out.push('</em>');
         i = j + 1;
         run = i;
@@ -336,13 +338,13 @@ function inlineTo(s, env, out) {
       continue;
     }
     if (c === '[') {
-      const k = findUnescaped(s, ']', i + 1);
+      const k = findUnescaped(s, ']', i + 1, n);
       const m = k !== -1 && s[k + 1] === '(' ? s.indexOf(')', k + 2) : -1;
-      const target = m === -1 ? '' : s.slice(k + 2, m);
+      const target = m === -1 || m >= n ? '' : s.slice(k + 2, m);
       if (target !== '' && !/\s/.test(target)) {
         flush(i);
         out.push('<a href="', escapeHtml(env.link(target)), '">');
-        inlineTo(s.slice(i + 1, k), env, out);
+        inlineTo(s, env, out, i + 1, k);
         out.push('</a>');
         i = m + 1;
         run = i;
