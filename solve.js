@@ -30,8 +30,17 @@ const INCLUDE_DEPTH = 8;
 /** Code-unit order (never the locale's). */
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
-/** `text` with & < > " and ' escaped. */
+/** `text` with & < > " and ' escaped. Runs with nothing to escape are returned as they are. */
 function escapeHtml(text) {
+  if (
+    text.indexOf('&') === -1 &&
+    text.indexOf('<') === -1 &&
+    text.indexOf('>') === -1 &&
+    text.indexOf('"') === -1 &&
+    text.indexOf("'") === -1
+  ) {
+    return text;
+  }
   return text.replace(/[&<>"']/g, (c) => ESCAPES[c]);
 }
 
@@ -225,8 +234,14 @@ function endsParagraph(line) {
   return BLANK.test(line) || FENCE_OPEN.test(line) || headingOf(line) !== null || HR.test(line);
 }
 
-/** A line as it is rendered: spaces and tabs at either end dropped. */
-const trimLine = (line) => line.replace(/^[ \t]+|[ \t]+$/g, '');
+/** A line as it is rendered: spaces and tabs at either end dropped. Unchanged lines are returned as they are. */
+function trimLine(line) {
+  let a = 0;
+  let b = line.length;
+  while (a < b && (line.charCodeAt(a) === 32 || line.charCodeAt(a) === 9)) a++;
+  while (b > a && (line.charCodeAt(b - 1) === 32 || line.charCodeAt(b - 1) === 9)) b--;
+  return a === 0 && b === line.length ? line : line.slice(a, b);
+}
 
 /** The characters a backslash escapes. */
 const ESCAPABLE = new Set(['\\', '`', '*', '_', '[', ']', '(', ')', '#', '+', '-', '.', '!', '>']);
@@ -340,11 +355,52 @@ function inlineTo(s, env, out) {
 }
 
 /**
+ * The words of the body's lines: runs of characters other than whitespace.
+ * Counted by hand over the lines, one pass, with the same whitespace set
+ * the /\S+/ grammar uses (so the count is identical, without a regex
+ * call per line).
+ */
+function countWords(lines, start) {
+  let w = 0;
+  for (let i = start; i < lines.length; i++) {
+    const line = lines[i];
+    let inWord = false;
+    for (let j = 0; j < line.length; j++) {
+      const c = line.charCodeAt(j);
+      const ws =
+        c === 32 ||
+        c === 9 ||
+        c === 10 ||
+        c === 11 ||
+        c === 12 ||
+        c === 13 ||
+        c === 160 ||
+        c === 5760 ||
+        (c >= 8192 && c <= 8202) ||
+        c === 8232 ||
+        c === 8233 ||
+        c === 8239 ||
+        c === 8287 ||
+        c === 12288 ||
+        c === 65279;
+      if (ws) inWord = false;
+      else if (!inWord) {
+        inWord = true;
+        w++;
+      }
+    }
+  }
+  return w;
+}
+
+/**
  * The body's lines from `start` rendered: its HTML (each block on its own
  * lines, a "\n" after the last), its table of contents (every level 2 and 3
- * heading) and its excerpt (the first paragraph's inline HTML, or "").
+ * heading), its excerpt (the first paragraph's inline HTML, or "") and its
+ * word count.
  */
 function renderBody(lines, start, env) {
+  const words = countWords(lines, start);
   const blocks = [];
   const toc = [];
   const ids = new Set();
@@ -441,7 +497,7 @@ function renderBody(lines, start, env) {
     if (excerpt === null) excerpt = html;
     blocks.push(`<p>${html}</p>`);
   }
-  return { html: blocks.length === 0 ? '' : `${blocks.join('\n')}\n`, toc, excerpt: excerpt ?? '' };
+  return { html: blocks.length === 0 ? '' : `${blocks.join('\n')}\n`, toc, excerpt: excerpt ?? '', words };
 }
 
 // ---------------------------------------------------------------- templates
@@ -649,16 +705,6 @@ function resolvePath(dir, rel) {
 
 const dirOf = (path) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
 
-/** The words of the body's lines: runs of characters other than whitespace. */
-function wordsOfLines(lines, start) {
-  let w = 0;
-  for (let i = start; i < lines.length; i++) {
-    const m = lines[i].match(/\S+/g);
-    if (m !== null) w += m.length;
-  }
-  return w;
-}
-
 /** One site's output tree: path -> text. */
 export function run(input) {
   const templates = new Map();
@@ -758,6 +804,7 @@ export function run(input) {
     s.html = md.html;
     s.toc = md.toc;
     s.excerpt = md.excerpt;
+    s.words = md.words;
   }
 
   // 5. Collections: posts newest first, then by slug; newer/older neighbours.
@@ -821,7 +868,7 @@ export function run(input) {
     date_long: s.data.date === undefined ? '' : longDate(s.data.date),
     summary: s.data.summary ?? '',
     excerpt: s.excerpt,
-    reading_minutes: Math.max(1, Math.ceil(wordsOfLines(s.lines, s.bodyStart) / 200)),
+    reading_minutes: Math.max(1, Math.ceil(s.words / 200)),
     tags: s.tagRefs.map((t) => ({ name: t.name, slug: t.slug, url: t.url })),
   });
   const cards = new Map(posts.map((p) => [p, cardOf(p)]));
