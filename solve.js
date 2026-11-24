@@ -370,28 +370,14 @@ function inlineTo(s, env, out) {
  * call per line).
  */
 /** One line's words: runs of characters other than whitespace, with the same whitespace set the /\S+/ grammar uses. */
+const WS_TABLE = new Uint8Array(65536);
+for (const c of [9, 10, 11, 12, 13, 32, 160, 5760, 8232, 8233, 8239, 8287, 12288, 65279]) WS_TABLE[c] = 1;
+for (let c = 8192; c <= 8202; c++) WS_TABLE[c] = 1;
 function lineWords(line) {
   let w = 0;
   let inWord = false;
   for (let j = 0; j < line.length; j++) {
-    const c = line.charCodeAt(j);
-    const ws =
-      c === 32 ||
-      c === 9 ||
-      c === 10 ||
-      c === 11 ||
-      c === 12 ||
-      c === 13 ||
-      c === 160 ||
-      c === 5760 ||
-      (c >= 8192 && c <= 8202) ||
-      c === 8232 ||
-      c === 8233 ||
-      c === 8239 ||
-      c === 8287 ||
-      c === 12288 ||
-      c === 65279;
-    if (ws) inWord = false;
+    if (WS_TABLE[line.charCodeAt(j)] === 1) inWord = false;
     else if (!inWord) {
       inWord = true;
       w++;
@@ -750,7 +736,8 @@ export function run(input) {
   const statics = [];
   for (const f of files) {
     if (f.path.endsWith('.md')) {
-      sources.push({ path: f.path, lines: f.content.replace(/\r\n?/g, '\n').split('\n') });
+      const text = f.content.indexOf('\r') === -1 ? f.content : f.content.replace(/\r\n?/g, '\n');
+      sources.push({ path: f.path, lines: text.split('\n') });
     } else {
       statics.push(f);
     }
