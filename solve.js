@@ -285,13 +285,10 @@ function inlineTo(s, env, out, lo = 0, hi = s.length) {
   let i = lo;
   let run = lo;
   const n = hi;
-  const flush = (end) => {
-    if (end > run) out.push(s.slice(run, end));
-  };
   while (i < n) {
     const c = s[i];
     if (c === '\\' && i + 1 < n && ESCAPABLE.has(s[i + 1])) {
-      flush(i);
+      if (i > run) out.push(s.slice(run, i));
       out.push(escapeHtml(s[i + 1]));
       i += 2;
       run = i;
@@ -300,7 +297,7 @@ function inlineTo(s, env, out, lo = 0, hi = s.length) {
     if (c === '`') {
       const j = s.indexOf('`', i + 1);
       if (j !== -1 && j < n && j > i + 1) {
-        flush(i);
+        if (i > run) out.push(s.slice(run, i));
         out.push('<code>', escapeHtml(s.slice(i + 1, j)), '</code>');
         i = j + 1;
         run = i;
@@ -313,7 +310,7 @@ function inlineTo(s, env, out, lo = 0, hi = s.length) {
       if (s[i + 1] === '*') {
         const j = findUnescaped(s, '**', i + 2, n);
         if (j > i + 2) {
-          flush(i);
+          if (i > run) out.push(s.slice(run, i));
           out.push('<strong>');
           inlineTo(s, env, out, i + 2, j);
           out.push('</strong>');
@@ -326,7 +323,7 @@ function inlineTo(s, env, out, lo = 0, hi = s.length) {
       }
       const j = findSingleStar(s, i + 1, n);
       if (j > i + 1) {
-        flush(i);
+        if (i > run) out.push(s.slice(run, i));
         out.push('<em>');
         inlineTo(s, env, out, i + 1, j);
         out.push('</em>');
@@ -342,7 +339,7 @@ function inlineTo(s, env, out, lo = 0, hi = s.length) {
       const m = k !== -1 && s[k + 1] === '(' ? s.indexOf(')', k + 2) : -1;
       const target = m === -1 || m >= n ? '' : s.slice(k + 2, m);
       if (target !== '' && !/\s/.test(target)) {
-        flush(i);
+        if (i > run) out.push(s.slice(run, i));
         out.push('<a href="', escapeHtml(env.link(target)), '">');
         inlineTo(s, env, out, i + 1, k);
         out.push('</a>');
@@ -354,7 +351,7 @@ function inlineTo(s, env, out, lo = 0, hi = s.length) {
       continue;
     }
     if (c === '&' || c === '<' || c === '>' || c === '"' || c === "'") {
-      flush(i);
+      if (i > run) out.push(s.slice(run, i));
       out.push(ESCAPES[c]);
       i++;
       run = i;
@@ -362,7 +359,7 @@ function inlineTo(s, env, out, lo = 0, hi = s.length) {
     }
     i++;
   }
-  flush(n);
+  if (n > run) out.push(s.slice(run, n));
 }
 
 /**
